@@ -40,3 +40,7 @@ To submit, run `./test_and_make_submission.sh` . This script will install your
 code's dependencies, run tests, and create a gzipped tarball with the output. We
 should be able to unzip your submitted tarball and run
 `./test_and_make_submission.sh` to verify your test results.
+
+
+## Current progress on hw4:
+- 目前我pass了所有的测试点，还差最后一个从获得数据到训练模型的应用过程，考虑到这个过程比较耗时耗力，暂。
