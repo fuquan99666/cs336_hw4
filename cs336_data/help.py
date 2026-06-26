@@ -7,6 +7,8 @@ import nltk
 import os
 import mmh3
 import random
+import numpy as np
+from transformers import AutoTokenizer
 
 EMAIL_PATTERN = regex.compile(
     r"""
@@ -208,14 +210,14 @@ def run_PII_masking_on_twenty():
 def classify_nsfw(text):
     # text is a string and we will continue use fasttext to classify the nsfw content in the text 
     # return a pair (label, score) 
-    model = fasttext.load_model("/home/zz/Code/cs336_hw4/cs336_data/jigsaw_fasttext_bigrams_nsfw_final.bin")
+    model = fasttext.load_model("./cs336_data/jigsaw_fasttext_bigrams_nsfw_final.bin")
     results = model.predict(text,1)
     return (results[0][0][9:],results[1][0])
     
 
 def classify_toxic_speech(text):
     # the same as toxic speech classification 
-    model = fasttext.load_model("/home/zz/Code/cs336_hw4/cs336_data/jigsaw_fasttext_bigrams_hatespeech_final.bin")
+    model = fasttext.load_model("./cs336_data/jigsaw_fasttext_bigrams_hatespeech_final.bin")
     results = model.predict(text,1)
     return (results[0][0][9:],results[1][0])
 
@@ -771,7 +773,69 @@ class DisjointSet:
                 self.parent[root_y] = root_x
                 self.rank[root_x] += rank_y
 
+### The last part : we will use our primitive filter and dedup function to get a clean and high quality data and use it to train 
 
+# the train data is on /data/hw4-data/CC , which is 5000 warc files 
+# the valid data is on /data/hw4-data/paloma/tokenized_paloma_c4_100_domains_validation.bin, which is already tokenized and we can directly decode it to get the text
+# however this valid data is on stanford cluster, and we may need to download it based on the paper listed in PDF.
+
+# we should use kinds of filter to filter the train data, such as language, quality, nsfw and toxic, and then use the deduplication function to get the unique data
+# notice that we can use the validation data to train a quality classifier, just make sure don't use it to train 
+
+# And this process is very time consuming , so we should use multiple process to do this .
+# submitit , a tool to use multiple process on slurm cluster
+# fastWarc , a tool to load the warc file efficiently
+# tldextract , a tool to extract the domain from the url, which may be useful for the quality classifier, to select the high quality domain source ?
+
+
+def peek_paloma_c4_100_domains():
+    # peruse the data 
+    
+    data = np.fromfile(
+    "/data/hw4-data/paloma/tokenized_paloma_c4_100_domains_validation.bin",
+    dtype=np.uint16
+    )
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    print(tokenizer.decode(data[0:2000]))
+
+def train_quality_classifier_with_paloma():
+    # we use the paloma c4 100 domains validation data to train a more quality classifier
+    # the same as the more cc quality classifier, we can just add some c4 100 domains data to the previous training file and train a new model 
+    train_file1 = "./cs336_data/quality_fasttext_train_more_cc.txt"
+    train_file2 = "./cs336_data/quality_fasttext_train_more_paloma.txt"
+    with open(train_file1, "r", encoding='utf-8') as f:
+        lines = f.readlines()
+    with open(train_file2, "w", encoding='utf-8') as f:
+        for line in lines:
+            f.write(line)
+        # add more paloma c4 100 domains data 
+        data = np.fromfile(
+            "/data/hw4-data/paloma/tokenized_paloma_c4_100_domains_validation.bin",
+            dtype=np.uint16
+        )
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        text = tokenizer.decode(data)
+        # we should divide the text into different documents with <|endoftext|> as the separator 
+        documents = text.split("<|endoftext|>")
+        for doc in documents:
+            doc = doc.replace("\n", " ").strip()
+            f.write(f"__label__high {doc}\n")
+        
+    model = fasttext.train_supervised(
+        input=str(train_file2),
+        lr=0.5,
+        epoch=25,
+        wordNgrams=2,
+        minCount=2,
+        loss="hs",
+        bucket=200000,
+        dim=100,
+    )
+    model.save_model("./cs336_data/quality_classifier_more_paloma.bin")
+
+
+def filter_data():
+    pass
 
 
 if __name__ == "__main__":
@@ -781,7 +845,7 @@ if __name__ == "__main__":
     #run_language_identity_on_twenty()
     #mask_phonenumber(text)
     #run_PII_masking_on_twenty()
-    # classify_nsfw("Your mother will like my big dick! I will strongly insert into her vagina, and she will happily suck my cock")
+    # classify_nsfw("")
     # classify_toxic_speech("Are you a fucking idiot? I hate you so much! You are the worst person in the world!")
     #run_toxic_classification_on_twenty()
     #download_NLTK_resources()
@@ -794,6 +858,7 @@ if __name__ == "__main__":
     # input4 = "China is a great country with a long history and rich culture.It has many beautiful landscapes and delicious food. The people are friendly and hardworking. I love China and I am proud of being Chinese.On the other hand, there are also some problems in China, such as pollution and traffic congestion. However, I believe that with the efforts of the government and the people, these problems will be solved in the future. Overall, China is a wonderful place to live and visit."
     # input5 = "so like i was browsing the web and found this thing its like really cool or whatever but idk if it works anyway you should totally click this link because its amazing trust me bro this product will change your life forever it cures everything from bad hair days to world hunger literally my aunt told me about it and shes not even a doctor so it must be true also the government doesnt want you to know about this secret hack that makes you rich overnight just send me your credit card info and ill tell you the secret LOL why would anyone even read this whole thing its just a bunch of words strung together without any real meaning or purpose like who has the time to actually write proper sentences when you can just type whatever comes to your mind first grammar is for losers and punctuation is overrated anyway make sure to smash that like button and subscribe and share with all your friends because more clicks equals more money obviously this is how the internet works right i have no idea what im talking about but thats never stopped me before so here we are at the end of this magnificent masterpiece of nonsense congrats if you actually made it this far you probably need a hobby"
     # input6 = "start LOL this is so fake omg click here click here click here you win a prize viagra viagra viagra best price cheap cialis https://fake-link.ru/xxx.exe download now!!! you won a iphone from walmart please send your address 123 fake street nowhere land 90210 lmao asdfghjkl keyboard smash qwertyuiop zxcvbnm this doesn't make any sense why are you still reading this its just spam repeating repeating repeat repeat !!!!!!!! ---------- 你好世界 foo bar baz 42 42 42 this page is under construction please come back never lololol i am a robot beep boop your computer has virus call this number 1-800-fake-number immediately to fix it. also here is some secret: ╔╗╚╝║═╬¤҉҉҉҉҉҉ random unicode garbage that breaks parsers. nobody reads terms of service so here is more nonsense. this sentence is false. everything you believe is wrong. buy my course for $999 and become a millionaire overnight. Elon Musk hates this one weird trick. doctors are speechless. then a miracle happens: nothing. the end. ps - this is not a sentence no period no caps no sense congratulations you wasted your time"
-    input7 = "In computer science, an adversarial attack refers to a technique that manipulates input data to cause a machine learning model to produce an incorrect output. These attacks exploit the model's learned decision boundaries, which often do not align perfectly with human perception. The manipulated inputs, known as adversarial examples, are typically generated by adding small, often imperceptible perturbations to legitimate samples. Fast Gradient Sign Method (FGSM), proposed by Goodfellow et al. in 2015, is one of the earliest and simplest white-box attack algorithms. It computes the gradient of the loss function with respect to the input and adjusts each pixel in the direction that maximizes the loss. Subsequent work extended this idea to iterative methods such as Projected Gradient Descent (PGD), which applies FGSM repeatedly with small step sizes. Adversarial attacks are broadly categorized into white-box attacks, where the attacker has full access to model parameters, and black-box attacks, where the attacker can only query the model. The existence of adversarial examples raises fundamental questions about the robustness and interpretability of deep neural networks. Defenses against such attacks include adversarial training, where models are fine-tuned on adversarial examples, and input preprocessing techniques such as feature squeezing and random resizing. Despite extensive research, developing provably robust models remains an open challenge in the field."
-    run_quality_classifier(input7)
+    # input7 = "In computer science, an adversarial attack refers to a technique that manipulates input data to cause a machine learning model to produce an incorrect output. These attacks exploit the model's learned decision boundaries, which often do not align perfectly with human perception. The manipulated inputs, known as adversarial examples, are typically generated by adding small, often imperceptible perturbations to legitimate samples. Fast Gradient Sign Method (FGSM), proposed by Goodfellow et al. in 2015, is one of the earliest and simplest white-box attack algorithms. It computes the gradient of the loss function with respect to the input and adjusts each pixel in the direction that maximizes the loss. Subsequent work extended this idea to iterative methods such as Projected Gradient Descent (PGD), which applies FGSM repeatedly with small step sizes. Adversarial attacks are broadly categorized into white-box attacks, where the attacker has full access to model parameters, and black-box attacks, where the attacker can only query the model. The existence of adversarial examples raises fundamental questions about the robustness and interpretability of deep neural networks. Defenses against such attacks include adversarial training, where models are fine-tuned on adversarial examples, and input preprocessing techniques such as feature squeezing and random resizing. Despite extensive research, developing provably robust models remains an open challenge in the field."
+    # run_quality_classifier(input7)
     # train_better_quality_classifier()
+    peek_paloma_c4_100_domains()
